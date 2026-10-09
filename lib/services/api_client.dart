@@ -1,15 +1,15 @@
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+/// Base URL for the marketgo-api backend.
+///
+/// `--dart-define=API_URL=...` wins when set; otherwise the production API is
+/// used.
 String defaultApiBaseUrl() {
   const fromEnv = String.fromEnvironment('API_URL');
   if (fromEnv.isNotEmpty) return fromEnv;
-  if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
-    return 'http://10.0.2.2:8080';
-  }
-  return 'http://localhost:8080';
+  return 'https://api.suftrip.com';
 }
 
 class ApiException implements Exception {

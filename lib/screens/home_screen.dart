@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../app.dart';
 import '../services/auth_service.dart';
 import '../services/delivery_service.dart';
 import '../services/mover_service.dart';
+import '../services/websocket_service.dart';
 import 'bank_account_screen.dart';
 import 'delivery_addresses_screen.dart';
 import 'favourites_screen.dart';
@@ -152,11 +155,35 @@ class _HomeTabState extends State<_HomeTab> {
   RiderDelivery? _available;
   RiderDelivery? _current;
   DeliveryEarnings? _earnings;
+  RiderWebSocket? _ws;
+  StreamSubscription<RiderWsEvent>? _wsSub;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _connectTripUpdates();
+  }
+
+  @override
+  void dispose() {
+    _wsSub?.cancel();
+    _ws?.dispose();
+    super.dispose();
+  }
+
+  /// Live trip feed: a new delivery request pops up immediately and trip
+  /// acceptance/status changes keep the offer card in sync with the customer.
+  void _connectTripUpdates() {
+    final token = AuthSession.instance.accessToken;
+    if (token == null || token == 'demo.access') return;
+    _ws = RiderWebSocket(api: AuthSession.instance.api);
+    _ws!.connect(token);
+    _wsSub = _ws!.events
+        .where((e) =>
+            e.type == 'delivery.available' ||
+            e.type == 'delivery.status_changed')
+        .listen((_) => _load());
   }
 
   Future<void> _load() async {
@@ -191,6 +218,10 @@ class _HomeTabState extends State<_HomeTab> {
         _current = d;
         _available = null;
       });
+      // Pull the server's accepted trip so the status card reflects the
+      // driver-acceptance state shared with the customer app.
+      await _load();
+      if (!mounted) return;
       _openNavigation(d);
     } catch (e) {
       if (!mounted) return;

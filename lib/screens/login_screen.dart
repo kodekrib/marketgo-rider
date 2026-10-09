@@ -5,6 +5,7 @@ import '../services/auth_service.dart';
 import '../services/settings_service.dart';
 import '../widgets/route_animation.dart';
 import 'forgot_password_screen.dart';
+import 'mfa_screen.dart';
 import 'otp_screen.dart';
 
 /// Intro / login screen for the MarketGO rider app.
@@ -68,8 +69,9 @@ class _LoginScreenState extends State<LoginScreen> {
       _error = null;
     });
 
+    bool signedIn;
     try {
-      await AuthSession.instance.signIn(email, password);
+      signedIn = await AuthSession.instance.signIn(email, password);
     } on ApiException catch (e) {
       if (mounted) {
         setState(() {
@@ -81,16 +83,17 @@ class _LoginScreenState extends State<LoginScreen> {
     }
 
     if (!mounted) return;
+    setState(() => _loading = false);
+
+    if (!signedIn) {
+      // Password login needs a second factor — hand over to the MFA screen.
+      if (AuthSession.instance.pendingMfa != null) _openMfa(email);
+      return;
+    }
 
     Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(builder: (_) => const RiderHome()),
     );
-  }
-
-  void _useDemo(String email) {
-    _emailController.text = email;
-    _passwordController.text = 'Rider@123';
-    _emailFocus.requestFocus();
   }
 
   /// Opens the phone/OTP sign-in flow. The OTP screen verifies the code with
@@ -112,12 +115,24 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  /// Bypasses the server entirely and enters an authenticated demo session.
-  void _signInTest() {
+  /// Opens the MFA code screen after a password login that was answered with
+  /// a challenge. Verifying completes the session and navigates on.
+  void _openMfa(String email) {
     FocusScope.of(context).unfocus();
-    AuthSession.instance.enterDemo();
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute<void>(builder: (_) => const RiderHome()),
+    final nav = Navigator.of(context);
+    nav.push(
+      MaterialPageRoute<void>(
+        builder: (_) => MfaScreen(
+          auth: AuthSession.instance,
+          email: email,
+          onVerified: () {
+            nav.pushAndRemoveUntil(
+              MaterialPageRoute<void>(builder: (_) => const RiderHome()),
+              (route) => false,
+            );
+          },
+        ),
+      ),
     );
   }
 
@@ -193,9 +208,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           error: _error,
                           loading: _loading,
                           onSignIn: _signIn,
-                          onTestMode: _signInTest,
                           onOpenOtp: _openOtp,
-                          onUseDemo: _useDemo,
                           requestFocusPassword: () =>
                               _passwordFocus.requestFocus(),
                           appName: _settings?.appName ?? 'MarketGO',
@@ -337,9 +350,7 @@ class _LoginCard extends StatelessWidget {
     required this.error,
     required this.loading,
     required this.onSignIn,
-    required this.onTestMode,
     required this.onOpenOtp,
-    required this.onUseDemo,
     required this.requestFocusPassword,
     required this.appName,
   });
@@ -355,9 +366,7 @@ class _LoginCard extends StatelessWidget {
   final String? error;
   final bool loading;
   final VoidCallback onSignIn;
-  final VoidCallback onTestMode;
   final VoidCallback onOpenOtp;
-  final ValueChanged<String> onUseDemo;
   final VoidCallback requestFocusPassword;
   final String appName;
 
@@ -390,76 +399,6 @@ class _LoginCard extends StatelessWidget {
         Text(
           'Use your $appName rider account to continue.',
           style: theme.textTheme.bodyMedium,
-        ),
-        const SizedBox(height: 16),
-
-        // Server-less test mode: lets you explore behind login before the
-        // backend / database is deployed.
-        Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: RiderApp.brandGreenLight,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: RiderApp.brandGreen.withOpacity(0.35),
-            ),
-          ),
-          child: Row(
-            children: [
-              Icon(Icons.flash_on_rounded,
-                  color: RiderApp.brandGreenDark),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'No server? Explore the full app now',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w800,
-                        fontSize: 13,
-                        color: RiderApp.brandGreenDark,
-                      ),
-                    ),
-                    Text(
-                      'Skips sign-in entirely for testing.',
-                      style: TextStyle(
-                        color: RiderApp.brandGreenDark,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              TextButton(
-                onPressed: onTestMode,
-                style: TextButton.styleFrom(
-                  foregroundColor: RiderApp.brandGreenDark,
-                ),
-                child: const Text('Test mode'),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-
-        // Demo credential quick-fill.
-        Row(
-          children: [
-            Text('Demo account', style: theme.textTheme.bodySmall),
-            const Spacer(),
-            _DemoChip(
-              label: 'Rider',
-              email: 'rider@marketgo.com',
-              onTap: onUseDemo,
-            ),
-            const SizedBox(width: 8),
-            _DemoChip(
-              label: 'Courier',
-              email: 'courier@marketgo.com',
-              onTap: onUseDemo,
-            ),
-          ],
         ),
         const SizedBox(height: 16),
 
@@ -597,34 +536,6 @@ class _LoginCard extends StatelessWidget {
           ],
         ),
       ],
-    );
-  }
-}
-
-class _DemoChip extends StatelessWidget {
-  const _DemoChip({
-    required this.label,
-    required this.email,
-    required this.onTap,
-  });
-
-  final String label;
-  final String email;
-  final ValueChanged<String> onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return ActionChip(
-      avatar: Icon(Icons.bolt, size: 16, color: RiderApp.brandGreen),
-      label: Text(label),
-      backgroundColor: RiderApp.brandGreenLight,
-      side: BorderSide.none,
-      labelStyle: TextStyle(
-        color: RiderApp.brandGreenDark,
-        fontWeight: FontWeight.w700,
-      ),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      onPressed: () => onTap(email),
     );
   }
 }

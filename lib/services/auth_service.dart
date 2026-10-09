@@ -44,6 +44,49 @@ class TokenPair {
   }
 }
 
+/// Multi-factor challenge returned by password login when MFA is enabled for
+/// the account. The client must collect a one-time code and exchange it for a
+/// token pair via `/api/v1/auth/mfa/verify`.
+class MfaChallenge {
+  const MfaChallenge({
+    required this.mfaToken,
+    required this.expiresIn,
+    required this.channels,
+    this.devCode,
+  });
+
+  final String mfaToken;
+  final int expiresIn;
+  final List<String> channels;
+
+  /// When developer preview is enabled the server echoes the code itself.
+  final String? devCode;
+
+  factory MfaChallenge.fromJson(Map<String, dynamic> json) {
+    return MfaChallenge(
+      mfaToken: json['mfa_token'] as String? ?? '',
+      expiresIn: (json['expires_in'] as num?)?.toInt() ?? 300,
+      channels:
+          (json['channels'] as List?)?.map((e) => '$e').toList() ??
+              const <String>[],
+      devCode: json['dev_code'] as String?,
+    );
+  }
+}
+
+/// Outcome of a password login: either a ready-to-store token pair or an MFA
+/// challenge the client has to resolve first.
+class LoginResult {
+  const LoginResult.success(this.tokens) : mfaChallenge = null;
+
+  const LoginResult.mfaRequired(this.mfaChallenge) : tokens = null;
+
+  final TokenPair? tokens;
+  final MfaChallenge? mfaChallenge;
+
+  bool get isMfaRequired => mfaChallenge != null;
+}
+
 /// Result of requesting an OTP code, including the delivery channels used,
 /// how long the code stays valid, and (when developer preview is enabled) the
 /// code itself.
@@ -74,10 +117,27 @@ class AuthService {
 
   final ApiClient api;
 
-  Future<TokenPair> signIn(String email, String password) async {
+  /// Signs in with email + password. Returns either a token pair or — when
+  /// the account has MFA enabled — the challenge to resolve next.
+  Future<LoginResult> signIn(String email, String password) async {
     final data = await api.post(
       '/api/v1/auth/login',
       body: {'email': email, 'password': password},
+    );
+    if (data['mfa_required'] == true) {
+      return LoginResult.mfaRequired(MfaChallenge.fromJson(data));
+    }
+    return LoginResult.success(TokenPair.fromJson(data));
+  }
+
+  /// Exchanges a pending MFA challenge + one-time code for a token pair.
+  Future<TokenPair> verifyMfa({
+    required String mfaToken,
+    required String code,
+  }) async {
+    final data = await api.post(
+      '/api/v1/auth/mfa/verify',
+      body: {'mfa_token': mfaToken, 'code': code},
     );
     return TokenPair.fromJson(data);
   }
@@ -151,37 +211,108 @@ class AuthSession extends ChangeNotifier {
   AuthUser? _user;
   String? _accessToken;
   String? _refreshToken;
+  bool _loading = false;
+  String? _error;
+  MfaChallenge? _pendingMfa;
 
   AuthUser? get user => _user;
   bool get isAuthenticated => _user != null;
+
+  /// Whether a sign-in or MFA verification call is currently in flight.
+  bool get loading => _loading;
+
+  /// Last sign-in / MFA error. Cleared when the next attempt starts.
+  String? get error => _error;
+
+  /// The MFA challenge awaiting a code, when password login required one.
+  MfaChallenge? get pendingMfa => _pendingMfa;
 
   /// The shared HTTP client for this session (used by service layers).
   ApiClient get api => service.api;
 
   String? get accessToken => _accessToken;
 
-  /// Server-less login so the app can be explored before the backend (or its
-  /// database) is up. Enters an authenticated demo session immediately.
-  void enterDemo() {
-    service.api.isOffline = true;
-    _user = const AuthUser(
-      id: 'demo-rider',
-      email: 'rider@test.marketgo',
-      name: 'Demo Rider',
-      role: 'rider',
-    );
-    _accessToken = 'demo.access';
-    _refreshToken = 'demo.refresh';
-    notifyListeners();
-  }
-
-  Future<void> signIn(String email, String password) async {
-    service.api.isOffline = false;
-    final tokens = await service.signIn(email.trim(), password);
+  /// Stores the token pair and loads the profile, entering an authenticated
+  /// session. Shared by password, MFA and phone-OTP sign-in.
+  Future<void> _completeSession(TokenPair tokens) async {
     final user = await service.me(tokens.accessToken);
     _accessToken = tokens.accessToken;
     _refreshToken = tokens.refreshToken;
     _user = user;
+    notifyListeners();
+  }
+
+  /// Signs in with email + password. Returns `true` when the session is open,
+  /// or `false` when the server answered with an MFA challenge — in that case
+  /// the challenge is kept in [pendingMfa] for the MFA screen.
+  Future<bool> signIn(String email, String password) async {
+    _loading = true;
+    _error = null;
+    _pendingMfa = null;
+    notifyListeners();
+    try {
+      final result = await service.signIn(email.trim(), password);
+      if (result.isMfaRequired) {
+        _pendingMfa = result.mfaChallenge;
+        _loading = false;
+        _error = null;
+        notifyListeners();
+        return false;
+      }
+      await _completeSession(result.tokens!);
+      _loading = false;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _loading = false;
+      _error = e is ApiException
+          ? e.message
+          : 'Could not sign in. Check your connection and try again.';
+      notifyListeners();
+      rethrow;
+    }
+  }
+
+  /// Exchanges the code entered on the MFA screen for a token pair and
+  /// completes the session. Returns `true` on success; otherwise the reason
+  /// is kept in [error] for the screen to show.
+  Future<bool> verifyMfaCode(String code) async {
+    final challenge = _pendingMfa;
+    if (challenge == null) {
+      _error = 'Your verification session expired. Please sign in again.';
+      notifyListeners();
+      return false;
+    }
+    _loading = true;
+    _error = null;
+    notifyListeners();
+    try {
+      final tokens = await service.verifyMfa(
+        mfaToken: challenge.mfaToken,
+        code: code,
+      );
+      await _completeSession(tokens);
+      _pendingMfa = null;
+      _loading = false;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _loading = false;
+      _error = e is ApiException
+          ? e.message
+          : 'Could not verify the code. Check your connection and try again.';
+      notifyListeners();
+      return false;
+    }
+  }
+
+  /// Discards a pending MFA challenge when the user backs out of the MFA
+  /// screen without verifying.
+  void cancelMfa() {
+    if (_pendingMfa == null && _error == null && !_loading) return;
+    _pendingMfa = null;
+    _error = null;
+    _loading = false;
     notifyListeners();
   }
 
@@ -194,13 +325,8 @@ class AuthSession extends ChangeNotifier {
   /// Completes phone sign-in: verifies the code, loads the profile and enters
   /// an authenticated session.
   Future<void> signInWithOtp(String phone, String code) async {
-    service.api.isOffline = false;
     final tokens = await service.verifyOtp(phone: phone, code: code);
-    final user = await service.me(tokens.accessToken);
-    _accessToken = tokens.accessToken;
-    _refreshToken = tokens.refreshToken;
-    _user = user;
-    notifyListeners();
+    await _completeSession(tokens);
   }
 
   Future<void> logOut() async {
@@ -209,6 +335,8 @@ class AuthSession extends ChangeNotifier {
     _user = null;
     _accessToken = null;
     _refreshToken = null;
+    _pendingMfa = null;
+    _error = null;
     notifyListeners();
     if (token != null && refresh != null) {
       try {
