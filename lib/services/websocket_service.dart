@@ -43,6 +43,12 @@ class RiderWebSocket {
   Stream<RiderWsEvent> get newDelivery => events.where((e) => e.type == 'delivery.available');
   Stream<RiderWsEvent> get deliveryStatus => events.where((e) => e.type == 'delivery.status_changed');
   Stream<RiderWsEvent> get notification => events.where((e) => e.type == 'notification.new');
+  Stream<RiderWsEvent> get requestAvailable =>
+      events.where((e) => e.type == 'request.available');
+  Stream<RiderWsEvent> get requestFulfilled =>
+      events.where((e) => e.type == 'request.fulfilled');
+  Stream<RiderWsEvent> get requestExpired =>
+      events.where((e) => e.type == 'request.expired');
 
   void connect(String token) {
     disconnect();

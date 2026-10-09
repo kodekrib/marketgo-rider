@@ -30,6 +30,8 @@ class ApiClient {
   final http.Client _http;
   final String baseUrl;
 
+  static const _timeout = Duration(seconds: 15);
+
   /// When true the client refuses network calls so the rest of the app can
   /// fall back to local demo data (server-less test session).
   bool isOffline = false;
@@ -50,7 +52,21 @@ class ApiClient {
       Uri.parse('$baseUrl$path'),
       headers: {'Content-Type': 'application/json', ...?headers},
       body: jsonEncode(body ?? const <String, dynamic>{}),
-    );
+    ).timeout(_timeout);
+    return _decode(res);
+  }
+
+  Future<Map<String, dynamic>> put(
+    String path, {
+    Map<String, dynamic>? body,
+    Map<String, String>? headers,
+  }) async {
+    await _guard();
+    final res = await _http.put(
+      Uri.parse('$baseUrl$path'),
+      headers: {'Content-Type': 'application/json', ...?headers},
+      body: jsonEncode(body ?? const <String, dynamic>{}),
+    ).timeout(_timeout);
     return _decode(res);
   }
 
@@ -64,7 +80,7 @@ class ApiClient {
       Uri.parse('$baseUrl$path'),
       headers: {'Content-Type': 'application/json', ...?headers},
       body: jsonEncode(body ?? const <String, dynamic>{}),
-    );
+    ).timeout(_timeout);
     return _decode(res);
   }
 
@@ -73,10 +89,9 @@ class ApiClient {
     Map<String, String>? headers,
   }) async {
     await _guard();
-    final res = await _http.get(
-      Uri.parse('$baseUrl$path'),
-      headers: headers ?? const <String, String>{},
-    );
+    final res = await _http
+        .get(Uri.parse('$baseUrl$path'), headers: headers ?? const <String, String>{})
+        .timeout(_timeout);
     return _decode(res);
   }
 
@@ -85,10 +100,9 @@ class ApiClient {
     Map<String, String>? headers,
   }) async {
     await _guard();
-    final res = await _http.delete(
-      Uri.parse('$baseUrl$path'),
-      headers: headers ?? const <String, String>{},
-    );
+    final res = await _http
+        .delete(Uri.parse('$baseUrl$path'), headers: headers ?? const <String, String>{})
+        .timeout(_timeout);
     return _decode(res);
   }
 

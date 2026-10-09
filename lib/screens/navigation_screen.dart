@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import '../app.dart';
 import '../services/auth_service.dart';
@@ -29,6 +30,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
   RiderDelivery? _delivery;
   Timer? _locationTimer;
   double _progress = 0;
+  Position? _lastKnownPosition;
   bool _busy = false;
   bool _demoLocalPickedUp = false;
 
@@ -54,18 +56,81 @@ class _NavigationScreenState extends State<NavigationScreen> {
     } catch (_) {}
   }
 
-  /// Simulates the rider moving along the route and pushes each GPS fix up.
-  void _startLocationStream(String token, RiderDelivery d) {
-    _locationTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
-      _progress = (_progress + 5 / 300).clamp(0.0, 1.0);
-      final position = simulatedRider(d).position;
-      if (!mounted) return;
-      setState(() {});
-      try {
-        await service.updateLocation(token, d.id, position.latitude,
-            position.longitude);
-      } catch (_) {}
-    });
+  /// Starts a GPS location stream for the rider and pushes location fixes to the backend.
+  Future<void> _startLocationStream(String token, RiderDelivery d) async {
+    // Check if location service is available
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      // Location service disabled - fall back to simulated position
+      _locationTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
+        _progress = (_progress + 5 / 300).clamp(0.0, 1.0);
+        final position = simulatedRider(d).position;
+        if (!mounted) return;
+        setState(() {});
+        try {
+          await service.updateLocation(token, d.id, position.latitude,
+              position.longitude);
+        } catch (_) {}
+      });
+      return;
+    }
+
+    // Get current position (will request permission if needed)
+    Position? position;
+    try {
+      position = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.high);
+      _lastKnownPosition = position;
+    } catch (_) {
+      position = null;
+    }
+
+    if (position != null) {
+      _locationTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
+        try {
+          Position currentPos = await Geolocator.getCurrentPosition(
+              desiredAccuracy: LocationAccuracy.high);
+          if (!mounted) return;
+          setState(() {});
+          try {
+            await service.updateLocation(token, d.id, currentPos.latitude,
+                currentPos.longitude);
+          } catch (_) {
+            // Fall back to last known position on error
+            if (_lastKnownPosition != null) {
+              if (!mounted) return;
+              setState(() {});
+              try {
+                await service.updateLocation(token, d.id, _lastKnownPosition!.latitude,
+                    _lastKnownPosition!.longitude);
+              } catch (_) {}
+            }
+          }
+        } catch (_) {
+          // Fall back to last known position on error
+          if (_lastKnownPosition != null) {
+            if (!mounted) return;
+            setState(() {});
+            try {
+              await service.updateLocation(token, d.id, _lastKnownPosition!.latitude,
+                  _lastKnownPosition!.longitude);
+            } catch (_) {}
+          }
+        }
+      });
+    } else {
+      // Permission denied or location unavailable - use simulated position
+      _locationTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
+        _progress = (_progress + 5 / 300).clamp(0.0, 1.0);
+        final position = simulatedRider(d).position;
+        if (!mounted) return;
+        setState(() {});
+        try {
+          await service.updateLocation(token, d.id, position.latitude,
+              position.longitude);
+        } catch (_) {}
+      });
+    }
   }
 
   @override

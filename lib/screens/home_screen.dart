@@ -5,7 +5,9 @@ import '../app.dart';
 import '../services/auth_service.dart';
 import '../services/delivery_service.dart';
 import '../services/mover_service.dart';
+import '../services/request_service.dart';
 import '../services/websocket_service.dart';
+import '../widgets/live_map.dart';
 import 'bank_account_screen.dart';
 import 'delivery_addresses_screen.dart';
 import 'favourites_screen.dart';
@@ -31,6 +33,11 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _tabIndex = 0;
   bool _online = true;
+  final RequestService _requestService =
+      RequestService(api: AuthSession.instance.api);
+  Timer? _presenceTimer;
+  final double _presenceLat = LagosLocations.vendorHub.latitude;
+  final double _presenceLng = LagosLocations.vendorHub.longitude;
 
   @override
   Widget build(BuildContext context) {
