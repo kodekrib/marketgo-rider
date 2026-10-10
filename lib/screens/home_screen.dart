@@ -13,6 +13,7 @@ import 'delivery_addresses_screen.dart';
 import 'favourites_screen.dart';
 import 'help_screen.dart';
 import 'info_screen.dart';
+import 'kyc_screen.dart';
 import 'login_screen.dart';
 import 'movers_tab.dart';
 import 'navigation_screen.dart';
@@ -40,6 +41,51 @@ class _HomeScreenState extends State<HomeScreen> {
   final double _presenceLng = LagosLocations.vendorHub.longitude;
 
   @override
+  void initState() {
+    super.initState();
+    _presenceTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (_online) _sendPresence();
+    });
+  }
+
+  @override
+  void dispose() {
+    _presenceTimer?.cancel();
+    super.dispose();
+  }
+
+  String? _token() {
+    final token = AuthSession.instance.accessToken;
+    return (token == null || token.isEmpty) ? null : token;
+  }
+
+  Future<void> _sendPresence([bool? online]) async {
+    final token = _token();
+    if (token == null) return;
+    try {
+      await _requestService.setPresence(
+        token,
+        online: online ?? _online,
+        latitude: _presenceLat,
+        longitude: _presenceLng,
+      );
+    } catch (_) {
+      // Presence is a best-effort heartbeat; ignore transient network errors.
+    }
+  }
+
+  Future<void> _setOnline(bool value) async {
+    _presenceTimer?.cancel();
+    if (value) {
+      _presenceTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+        if (mounted && _online) _sendPresence();
+      });
+    }
+    setState(() => _online = value);
+    await _sendPresence(value);
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: Stack(
@@ -64,7 +110,7 @@ class _HomeScreenState extends State<HomeScreen> {
       case 0:
         return _HomeTab(
           online: _online,
-          onToggleOnline: (v) => setState(() => _online = v),
+          onToggleOnline: _setOnline,
         );
       case 1:
         return const _DeliveriesTab();
@@ -1254,13 +1300,13 @@ class _ProfileCard extends StatelessWidget {
       (
         Icons.directions_bike,
         'My vehicle',
-        'The vehicle you use for MarketGO deliveries.',
-        ['MarketGO Bike · NG', 'Registered: Jun 2026'],
+        'Your vehicle and verification profile for deliveries.',
+        ['Verified riders are shown to customers when choosing a courier'],
       ),
       (
         Icons.shield_outlined,
-        'Insurance & docs',
-        'Your insurance and rider documents are reviewed when you upload them.',
+        'Verification & docs',
+        'NIN, licence, insurance and vehicle details for review.',
         [],
       ),
       (
@@ -1358,6 +1404,15 @@ class _ProfileCard extends StatelessWidget {
                   onTap: () {
                     if (entries[i].$1 == Icons.logout) {
                       _confirmLogout(context);
+                      return;
+                    }
+                    if (entries[i].$1 == Icons.directions_bike ||
+                        entries[i].$1 == Icons.shield_outlined) {
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const KYCScreen(),
+                        ),
+                      );
                       return;
                     }
                     if (entries[i].$1 == Icons.account_balance_rounded) {
