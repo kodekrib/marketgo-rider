@@ -66,9 +66,8 @@ class MfaChallenge {
     return MfaChallenge(
       mfaToken: json['mfa_token'] as String? ?? '',
       expiresIn: (json['expires_in'] as num?)?.toInt() ?? 300,
-      channels:
-          (json['channels'] as List?)?.map((e) => '$e').toList() ??
-              const <String>[],
+      channels: (json['channels'] as List?)?.map((e) => '$e').toList() ??
+          const <String>[],
       devCode: json['dev_code'] as String?,
     );
   }
@@ -104,9 +103,8 @@ class SendOtpResult {
   factory SendOtpResult.fromJson(Map<String, dynamic> json) {
     return SendOtpResult(
       expiresIn: (json['expires_in'] as num?)?.toInt() ?? 600,
-      channels:
-          (json['channels'] as List?)?.map((e) => '$e').toList() ??
-              const <String>[],
+      channels: (json['channels'] as List?)?.map((e) => '$e').toList() ??
+          const <String>[],
       devCode: json['dev_code'] as String?,
     );
   }
@@ -203,7 +201,18 @@ class AuthService {
 
 /// Singleton session that keeps the rider's token + profile in memory.
 class AuthSession extends ChangeNotifier {
-  AuthSession._();
+  AuthSession._() {
+    service.api.tokenSource = TokenSource(
+      getAccessToken: () => _accessToken,
+      getRefreshToken: () => _refreshToken,
+      store: ({required String accessToken, required String refreshToken}) {
+        _accessToken = accessToken;
+        _refreshToken = refreshToken;
+        notifyListeners();
+      },
+      onExpired: _expireSession,
+    );
+  }
 
   static final AuthSession instance = AuthSession._();
 
@@ -343,5 +352,17 @@ class AuthSession extends ChangeNotifier {
         await service.signOut(token, refresh);
       } catch (_) {}
     }
+  }
+
+  /// Clears the session without hitting the server, used when a token refresh
+  /// is rejected (revoked refresh token or a disabled account).
+  void _expireSession() {
+    if (_user == null && _accessToken == null) return;
+    _user = null;
+    _accessToken = null;
+    _refreshToken = null;
+    _pendingMfa = null;
+    _error = null;
+    notifyListeners();
   }
 }

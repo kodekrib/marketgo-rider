@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'api_client.dart';
+import 'auth_service.dart';
 
 /// Event received from the backend WebSocket.
 class RiderWsEvent {
@@ -40,9 +41,12 @@ class RiderWebSocket {
   final _events = StreamController<RiderWsEvent>.broadcast();
   Stream<RiderWsEvent> get events => _events.stream;
 
-  Stream<RiderWsEvent> get newDelivery => events.where((e) => e.type == 'delivery.available');
-  Stream<RiderWsEvent> get deliveryStatus => events.where((e) => e.type == 'delivery.status_changed');
-  Stream<RiderWsEvent> get notification => events.where((e) => e.type == 'notification.new');
+  Stream<RiderWsEvent> get newDelivery =>
+      events.where((e) => e.type == 'delivery.available');
+  Stream<RiderWsEvent> get deliveryStatus =>
+      events.where((e) => e.type == 'delivery.status_changed');
+  Stream<RiderWsEvent> get notification =>
+      events.where((e) => e.type == 'notification.new');
   Stream<RiderWsEvent> get requestAvailable =>
       events.where((e) => e.type == 'request.available');
   Stream<RiderWsEvent> get requestFulfilled =>
@@ -58,7 +62,17 @@ class RiderWebSocket {
   }
 
   void _doConnect() {
-    if (_token == null || _intentionalClose) return;
+    if (_intentionalClose) return;
+
+    // Re-read the live access token on every (re)connect so a refreshed
+    // session keeps the socket authenticated.
+    if (!AuthSession.instance.isAuthenticated) {
+      _intentionalClose = true;
+      return;
+    }
+    final freshToken = AuthSession.instance.accessToken;
+    if (freshToken == null || freshToken.isEmpty) return;
+    _token = freshToken;
 
     final wsUrl = api.baseUrl.replaceFirst('http', 'ws');
     final uri = Uri.parse('$wsUrl/ws?token=$_token');
