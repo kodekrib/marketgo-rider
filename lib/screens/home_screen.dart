@@ -9,6 +9,7 @@ import '../services/request_service.dart';
 import '../services/websocket_service.dart';
 import '../widgets/live_map.dart';
 import 'bank_account_screen.dart';
+import 'chat_screen.dart';
 import 'delivery_addresses_screen.dart';
 import 'favourites_screen.dart';
 import 'help_screen.dart';
@@ -293,6 +294,27 @@ class _HomeTabState extends State<_HomeTab> {
     );
   }
 
+  /// Opens the customer chat thread for the active delivery.
+  void _openChat(RiderDelivery d) {
+    final name =
+        d.customerName.isNotEmpty ? d.customerName : 'Customer';
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => RiderChatScreen(
+          deliveryId: d.id,
+          contactName: name,
+          contactSubtitle: 'MarketGO Customer',
+          bannerTitle: d.pickupLabel,
+          bannerSubtitle: '→ ${d.deliveryAddress}',
+          token: AuthSession.instance.accessToken,
+          currentUserId: int.tryParse(AuthSession.instance.user?.id ?? ''),
+          ws: _ws,
+          api: AuthSession.instance.api,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final name =
@@ -315,6 +337,9 @@ class _HomeTabState extends State<_HomeTab> {
               delivery: offer,
               inProgress: _current != null,
               onAccept: () => _accept(offer),
+              onChat: offer == _current
+                  ? () => _openChat(offer)
+                  : null,
               onDecline: _current != null
                   ? null
                   : () {
@@ -590,12 +615,16 @@ class _DeliveryOffer extends StatelessWidget {
     this.inProgress = false,
     required this.onAccept,
     this.onDecline,
+    this.onChat,
   });
 
   final RiderDelivery? delivery;
   final bool inProgress;
   final VoidCallback onAccept;
   final VoidCallback? onDecline;
+
+  /// Opens the customer chat thread for the active delivery.
+  final VoidCallback? onChat;
 
   @override
   Widget build(BuildContext context) {
@@ -670,10 +699,11 @@ class _DeliveryOffer extends StatelessWidget {
           const SizedBox(height: 16),
           Row(
             children: [
-              if (onDecline != null) ...[
+              if (inProgress) ...[
                 Expanded(
-                  child: OutlinedButton(
-                    onPressed: onDecline,
+                  child: OutlinedButton.icon(
+                    onPressed: onChat,
+                    icon: const Icon(Icons.chat_bubble_outline, size: 18),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: Colors.white,
                       side: const BorderSide(color: Colors.white, width: 1.6),
@@ -681,7 +711,7 @@ class _DeliveryOffer extends StatelessWidget {
                           borderRadius: BorderRadius.circular(14)),
                       minimumSize: const Size.fromHeight(52),
                     ),
-                    child: const Text('Decline',
+                    label: const Text('Message',
                         style: TextStyle(fontWeight: FontWeight.w700)),
                   ),
                 ),

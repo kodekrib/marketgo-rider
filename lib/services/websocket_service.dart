@@ -28,6 +28,7 @@ class RiderWsEvent {
 /// - `delivery.status_changed` — delivery lifecycle transitions
 /// - `delivery.location_updated` — location confirmation
 /// - `notification.new` — in-app notifications
+/// - `chat.message` — new messages on a delivery thread
 class RiderWebSocket {
   RiderWebSocket({required this.api});
 
@@ -53,6 +54,10 @@ class RiderWebSocket {
       events.where((e) => e.type == 'request.fulfilled');
   Stream<RiderWsEvent> get requestExpired =>
       events.where((e) => e.type == 'request.expired');
+
+  /// New messages on a customer chat thread (`chat.message`).
+  Stream<RiderWsEvent> get chatMessage =>
+      events.where((e) => e.type == 'chat.message');
 
   void connect(String token) {
     disconnect();
