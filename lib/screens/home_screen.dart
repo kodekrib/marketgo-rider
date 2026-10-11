@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import '../app.dart';
 import '../services/auth_service.dart';
 import '../services/delivery_service.dart';
@@ -38,12 +39,19 @@ class _HomeScreenState extends State<HomeScreen> {
   final RequestService _requestService =
       RequestService(api: AuthSession.instance.api);
   Timer? _presenceTimer;
-  final double _presenceLat = LagosLocations.vendorHub.latitude;
-  final double _presenceLng = LagosLocations.vendorHub.longitude;
+  double _presenceLat = LagosLocations.vendorHub.latitude;
+  double _presenceLng = LagosLocations.vendorHub.longitude;
 
   @override
   void initState() {
     super.initState();
+    _resolvePosition().then((pos) {
+      if (!mounted) return;
+      setState(() {
+        _presenceLat = pos?.latitude ?? LagosLocations.vendorHub.latitude;
+        _presenceLng = pos?.longitude ?? LagosLocations.vendorHub.longitude;
+      });
+    });
     _presenceTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       if (_online) _sendPresence();
     });
@@ -53,6 +61,14 @@ class _HomeScreenState extends State<HomeScreen> {
   void dispose() {
     _presenceTimer?.cancel();
     super.dispose();
+  }
+
+  Future<Position?> _resolvePosition() async {
+    try {
+      return await Geolocator.getLastKnownPosition(LocationService.gpsAuto);
+    } catch (_) {
+      return null;
+    }
   }
 
   String? _token() {
@@ -103,8 +119,66 @@ class _HomeScreenState extends State<HomeScreen> {
         currentIndex: _tabIndex,
         onTap: (i) => setState(() => _tabIndex = i),
       ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () async {
+          final token = _token();
+          if (token == null) return;
+          final requests = await _requestService.availableRequests(token);
+          if (!mounted) return;
+          if (requests.isEmpty) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('No available delivery requests nearby.')),
+            );
+            return;
+          }
+          // Show the first request's details in a bottom sheet.
+          final req = requests.first;
+          showModalBottomSheet<void>(
+            context: context,
+            isScrollControlled: true,
+            backgroundColor: Colors.white,
+            shape: const RoundedRectangleBorder(
+              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+            ),
+            builder: (_) => Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(context).viewInsets.bottom,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ListTile(
+                    title: Text('${req.pickupLabel}'),
+                    subtitle: Text('Est. fee: ₦${req.estFee.toStringAsFixed(0)}'),
+                  ),
+                  const SizedBox(height: 8),
+                  TextFormField(
+                    decoration: const InputDecoration(
+                      labelText: 'Your bid price',
+                      border: OutlineInputBorder(),
+                    ),
+                    keyboardType: TextInputType.number,
+                    onChanged: (_) {},
+                  ),
+                  const SizedBox(height: 8),
+                  ElevatedButton(
+                    onPressed: () {
+                      // TODO: call _requestService.bid(token, req.id, price)
+                      Navigator.of(context).pop();
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Bid placed (stub)')),
+                      );
+                    },
+                    child: const Text('Place bid'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+        child: const Icon(Icons.format_list_numbered),
+      ),
     );
-  }
 
   Widget _tabKey(int i) {
     switch (i) {
