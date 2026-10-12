@@ -131,13 +131,13 @@ class ApiClient {
     var requestHeaders = {'Content-Type': 'application/json', ...?headers};
 
     // Stamp the live access token onto authenticated requests, overriding any
-    // stale token the caller captured in its local variable.
+    // stale token the caller captured in its local variable — but only when a
+    // live token exists; otherwise leave the caller's header untouched so an
+    // empty 'Bearer ' is never sent to the backend.
     final needsAuth = headers?.containsKey('Authorization') ?? false;
     if (needsAuth) {
       final token = tokenSource?.accessToken;
-      if (token == null || token.isEmpty) {
-        requestHeaders = {...requestHeaders, 'Authorization': 'Bearer '};
-      } else {
+      if (token != null && token.isNotEmpty) {
         requestHeaders = {...requestHeaders, 'Authorization': 'Bearer $token'};
       }
     }
