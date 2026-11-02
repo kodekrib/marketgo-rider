@@ -28,7 +28,13 @@ class MfaScreen extends StatefulWidget {
 class _MfaScreenState extends State<MfaScreen> {
   final _codeFocus = FocusNode();
   final _codeController = TextEditingController();
-  final List<String> _digits = List.filled(6, '');
+  late final List<String> _digits;
+
+  @override
+  void initState() {
+    super.initState();
+    _digits = List.filled(widget.auth.pendingMfa?.codeLength ?? 6, '');
+  }
 
   bool _verified = false;
   String? _inputError;
@@ -41,23 +47,27 @@ class _MfaScreenState extends State<MfaScreen> {
   }
 
   void _onCodeChanged(String value) {
-    final digits = value.replaceAll(RegExp(r'[^0-9]'), '').padRight(6, ' ');
+    final digits =
+        value.replaceAll(RegExp(r'[^0-9]'), '').padRight(_digits.length, ' ');
     setState(() {
-      _digits.fillRange(0, 6, '');
-      for (var i = 0; i < 6; i++) {
+      _digits.fillRange(0, _digits.length, '');
+      for (var i = 0; i < _digits.length; i++) {
         _digits[i] = digits[i] == ' ' ? '' : digits[i];
       }
       if (_inputError != null) _inputError = null;
     });
-    if (value.replaceAll(RegExp(r'[^0-9]'), '').length == 6) {
+    if (value.replaceAll(RegExp(r'[^0-9]'), '').length == _digits.length &&
+        !widget.auth.loading) {
       _verify();
     }
   }
 
   Future<void> _verify() async {
     final code = _codeController.text.replaceAll(RegExp(r'[^0-9]'), '');
-    if (code.length != 6) {
-      setState(() => _inputError = 'Enter the full 6-digit code.');
+    if (widget.auth.loading) return;
+    if (code.length != _digits.length) {
+      setState(
+          () => _inputError = 'Enter the full ${_digits.length}-digit code.');
       return;
     }
     FocusScope.of(context).unfocus();
@@ -118,18 +128,18 @@ class _MfaScreenState extends State<MfaScreen> {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'For your security, enter the 6-digit code we sent to '
+                    'For your security, enter the ${_digits.length}-digit code we sent to '
                     '${widget.email}.',
                     style: theme.textTheme.bodyMedium,
                   ),
                   const SizedBox(height: 24),
-
                   if (devCode != null && devCode.isNotEmpty) ...[
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
                         color: RiderApp.brandGreenLight,
-                        borderRadius: const BorderRadius.all(Radius.circular(16)),
+                        borderRadius:
+                            const BorderRadius.all(Radius.circular(16)),
                       ),
                       child: Row(
                         children: [
@@ -151,15 +161,17 @@ class _MfaScreenState extends State<MfaScreen> {
                     ),
                     const SizedBox(height: 20),
                   ],
-
                   GestureDetector(
                     onTap: () => _codeFocus.requestFocus(),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: List.generate(6, (i) {
+                      children: List.generate(_digits.length, (i) {
                         final selected = _codeFocus.hasFocus;
                         return Container(
-                          width: 46,
+                          width: ((MediaQuery.sizeOf(context).width - 80) /
+                                  _digits.length)
+                              .clamp(20.0, 46.0)
+                              .toDouble(),
                           height: 56,
                           alignment: Alignment.center,
                           decoration: BoxDecoration(
@@ -193,12 +205,12 @@ class _MfaScreenState extends State<MfaScreen> {
                     controller: _codeController,
                     focusNode: _codeFocus,
                     keyboardType: TextInputType.number,
-                    maxLength: 6,
+                    maxLength: _digits.length,
                     maxLines: 1,
                     autofocus: true,
                     onChanged: _onCodeChanged,
-                    style:
-                        const TextStyle(fontSize: 0.1, color: Colors.transparent),
+                    style: const TextStyle(
+                        fontSize: 0.1, color: Colors.transparent),
                     decoration: const InputDecoration(
                       counterText: '',
                       border: InputBorder.none,
@@ -256,8 +268,7 @@ class _ErrorBanner extends StatelessWidget {
         ),
         child: Row(
           children: [
-            const Icon(Icons.error_outline,
-                color: Color(0xFFB3261E), size: 20),
+            const Icon(Icons.error_outline, color: Color(0xFFB3261E), size: 20),
             const SizedBox(width: 8),
             Expanded(
               child: Text(

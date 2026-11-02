@@ -51,12 +51,14 @@ class MfaChallenge {
   const MfaChallenge({
     required this.mfaToken,
     required this.expiresIn,
+    this.codeLength = 6,
     required this.channels,
     this.devCode,
   });
 
   final String mfaToken;
   final int expiresIn;
+  final int codeLength;
   final List<String> channels;
 
   /// When developer preview is enabled the server echoes the code itself.
@@ -65,6 +67,8 @@ class MfaChallenge {
   factory MfaChallenge.fromJson(Map<String, dynamic> json) {
     return MfaChallenge(
       mfaToken: json['mfa_token'] as String? ?? '',
+      codeLength:
+          ((json['code_length'] as num?)?.toInt() ?? 6).clamp(4, 8).toInt(),
       expiresIn: (json['expires_in'] as num?)?.toInt() ?? 300,
       channels: (json['channels'] as List?)?.map((e) => '$e').toList() ??
           const <String>[],
@@ -92,17 +96,21 @@ class LoginResult {
 class SendOtpResult {
   const SendOtpResult({
     required this.expiresIn,
+    this.codeLength = 6,
     required this.channels,
     this.devCode,
   });
 
   final int expiresIn;
+  final int codeLength;
   final List<String> channels;
   final String? devCode;
 
   factory SendOtpResult.fromJson(Map<String, dynamic> json) {
     return SendOtpResult(
       expiresIn: (json['expires_in'] as num?)?.toInt() ?? 600,
+      codeLength:
+          ((json['code_length'] as num?)?.toInt() ?? 6).clamp(4, 8).toInt(),
       channels: (json['channels'] as List?)?.map((e) => '$e').toList() ??
           const <String>[],
       devCode: json['dev_code'] as String?,

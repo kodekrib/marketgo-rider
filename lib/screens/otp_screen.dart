@@ -8,8 +8,8 @@ import '../services/auth_service.dart';
 /// Phone/OTP sign-in screen used by the "Phone" and "OTP" options on login.
 ///
 /// Two steps: request a code against a Nigerian phone number, then enter the
-/// 6-digit code. Codes are delivered by the marketgo-api (WhatsApp and/or
-/// email). When developer preview is enabled the code is shown on the card.
+/// configured-length code. Phone codes are delivered over WhatsApp.
+/// When developer preview is enabled the code is shown on the card.
 class OtpScreen extends StatefulWidget {
   const OtpScreen({super.key, required this.onVerified, this.title});
 
@@ -24,10 +24,10 @@ class _OtpScreenState extends State<OtpScreen> {
   final _phoneController = TextEditingController();
   final _codeFocus = FocusNode();
   final _codeController = TextEditingController();
-  final List<String> _digits = List.filled(6, '');
+  List<String> _digits = List.filled(6, '');
 
   Timer? _timer;
-  int _secondsLeft = 30;
+  int _secondsLeft = 60;
   bool _sent = false;
   bool _loading = false;
   bool _verifying = false;
@@ -46,7 +46,7 @@ class _OtpScreenState extends State<OtpScreen> {
 
   void _startTimer() {
     _timer?.cancel();
-    setState(() => _secondsLeft = 30);
+    setState(() => _secondsLeft = 60);
     _timer = Timer.periodic(const Duration(seconds: 1), (t) {
       if (!mounted) return;
       setState(() => _secondsLeft -= 1);
@@ -79,6 +79,8 @@ class _OtpScreenState extends State<OtpScreen> {
         _sent = true;
         _phone = normalized;
         _devCode = result.devCode;
+        _digits = List.filled(result.codeLength, '');
+        _codeController.clear();
       });
       _startTimer();
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -94,7 +96,8 @@ class _OtpScreenState extends State<OtpScreen> {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = 'Could not request a code. Check your connection and try again.';
+        _error =
+            'Could not request a code. Check your connection and try again.';
       });
     }
   }
@@ -102,29 +105,32 @@ class _OtpScreenState extends State<OtpScreen> {
   void _resend() {
     _codeController.clear();
     setState(() {
-      _digits.fillRange(0, 6, '');
+      _digits.fillRange(0, _digits.length, '');
       _error = null;
     });
     _sendCode();
   }
 
   void _onCodeChanged(String value) {
-    final digits = value.replaceAll(RegExp(r'[^0-9]'), '').padRight(6, ' ');
+    final digits =
+        value.replaceAll(RegExp(r'[^0-9]'), '').padRight(_digits.length, ' ');
     setState(() {
-      _digits.fillRange(0, 6, '');
-      for (var i = 0; i < 6; i++) {
+      _digits.fillRange(0, _digits.length, '');
+      for (var i = 0; i < _digits.length; i++) {
         _digits[i] = digits[i] == ' ' ? '' : digits[i];
       }
     });
-    if (value.replaceAll(RegExp(r'[^0-9]'), '').length == 6) {
+    if (value.replaceAll(RegExp(r'[^0-9]'), '').length == _digits.length &&
+        !_verifying) {
       _verify();
     }
   }
 
   Future<void> _verify() async {
     final code = _codeController.text.replaceAll(RegExp(r'[^0-9]'), '');
-    if (code.length != 6) {
-      setState(() => _error = 'Enter the full 6-digit code.');
+    if (_verifying) return;
+    if (code.length != _digits.length) {
+      setState(() => _error = 'Enter the full ${_digits.length}-digit code.');
       return;
     }
     setState(() {
@@ -181,12 +187,11 @@ class _OtpScreenState extends State<OtpScreen> {
             const SizedBox(height: 6),
             Text(
               _sent
-                  ? 'We sent a 6-digit code to $_phone via WhatsApp and/or email.'
+                  ? 'We sent a ${_digits.length}-digit code to $_phone via WhatsApp.'
                   : 'We\'ll send you a one-time code to sign in quickly.',
               style: theme.textTheme.bodyMedium,
             ),
             const SizedBox(height: 24),
-
             if (!_sent) ...[
               TextField(
                 controller: _phoneController,
@@ -248,10 +253,13 @@ class _OtpScreenState extends State<OtpScreen> {
                 onTap: () => _codeFocus.requestFocus(),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: List.generate(6, (i) {
+                  children: List.generate(_digits.length, (i) {
                     final selected = _codeFocus.hasFocus;
                     return Container(
-                      width: 46,
+                      width: ((MediaQuery.sizeOf(context).width - 80) /
+                              _digits.length)
+                          .clamp(20.0, 46.0)
+                          .toDouble(),
                       height: 56,
                       alignment: Alignment.center,
                       decoration: BoxDecoration(
@@ -285,11 +293,12 @@ class _OtpScreenState extends State<OtpScreen> {
                 controller: _codeController,
                 focusNode: _codeFocus,
                 keyboardType: TextInputType.number,
-                maxLength: 6,
+                maxLength: _digits.length,
                 maxLines: 1,
                 autofocus: true,
                 onChanged: _onCodeChanged,
-                style: const TextStyle(fontSize: 0.1, color: Colors.transparent),
+                style:
+                    const TextStyle(fontSize: 0.1, color: Colors.transparent),
                 decoration: const InputDecoration(
                   counterText: '',
                   border: InputBorder.none,
@@ -367,8 +376,7 @@ class _ErrorBanner extends StatelessWidget {
         ),
         child: Row(
           children: [
-            const Icon(Icons.error_outline,
-                color: Color(0xFFB3261E), size: 20),
+            const Icon(Icons.error_outline, color: Color(0xFFB3261E), size: 20),
             const SizedBox(width: 8),
             Expanded(
               child: Text(

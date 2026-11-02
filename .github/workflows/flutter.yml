@@ -1,0 +1,25 @@
+name: Flutter CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.22.3
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze --no-pub --no-fatal-infos
+      - run: flutter test --no-pub
+      - run: flutter build apk --debug --no-pub
