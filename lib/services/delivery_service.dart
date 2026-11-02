@@ -68,11 +68,12 @@ class RiderDelivery {
   }
 
   bool get hasCoords =>
-      pickupLat != null && pickupLng != null &&
-      deliveryLat != null && deliveryLng != null;
+      pickupLat != null &&
+      pickupLng != null &&
+      deliveryLat != null &&
+      deliveryLng != null;
 
-  bool get isActive =>
-      status != 'delivered' && status != 'cancelled';
+  bool get isActive => status != 'delivered' && status != 'cancelled';
 
   /// Human label for the delivery lifecycle.
   String get statusLabel {
@@ -135,8 +136,7 @@ class DeliveryService {
 
   final ApiClient api;
 
-  Map<String, String> _auth(String token) =>
-      {'Authorization': 'Bearer $token'};
+  Map<String, String> _auth(String token) => {'Authorization': 'Bearer $token'};
 
   Future<List<RiderDelivery>> available(String token) async {
     final data = await api.get('/api/v1/rider/deliveries/available',
@@ -167,17 +167,27 @@ class DeliveryService {
     return _list(data['deliveries']);
   }
 
-  Future<void> updateStatus(
-      String token, int deliveryId, String status) async {
+  Future<void> updateStatus(String token, int deliveryId, String status) async {
     await api.patch('/api/v1/rider/deliveries/$deliveryId/status',
         headers: _auth(token), body: {'status': status});
   }
 
   Future<void> updateLocation(
-      String token, int deliveryId, double latitude, double longitude) async {
+    String token,
+    int deliveryId,
+    double latitude,
+    double longitude, {
+    required double accuracyM,
+    required DateTime observedAt,
+  }) async {
     await api.patch('/api/v1/rider/deliveries/$deliveryId/location',
         headers: _auth(token),
-        body: {'latitude': latitude, 'longitude': longitude});
+        body: {
+          'latitude': latitude,
+          'longitude': longitude,
+          'accuracy_m': accuracyM,
+          'observed_at': observedAt.toUtc().toIso8601String(),
+        });
   }
 
   Future<DeliveryEarnings> earnings(String token) async {

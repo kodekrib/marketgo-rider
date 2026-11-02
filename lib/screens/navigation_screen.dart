@@ -11,8 +11,8 @@ import '../widgets/live_map.dart';
 /// Rider-facing navigation screen that shows the route from the pickup to the
 /// customer's drop-off address.
 ///
-/// When opened with (or able to load) a real delivery it streams the rider's
-/// simulated position to the backend every few seconds via
+/// When opened with (or able to load) a real delivery it streams measured GPS
+/// fixes to the backend via
 /// PATCH /api/v1/rider/deliveries/:id/location so the customer's tracking
 /// screen can follow along, and moves the delivery through the rider status
 /// pipeline (picked_up → in_transit → delivered).
@@ -29,8 +29,12 @@ class _NavigationScreenState extends State<NavigationScreen> {
   DeliveryService service = DeliveryService(api: AuthSession.instance.api);
   RiderDelivery? _delivery;
   Timer? _locationTimer;
+  StreamSubscription<Position>? _locationSubscription;
   double _progress = 0;
   Position? _lastKnownPosition;
+  DateTime? _lastSubmittedAt;
+  String? _trackingStatus;
+  bool _locationUpdateInFlight = false;
   bool _busy = false;
   bool _demoLocalPickedUp = false;
 
@@ -38,13 +42,21 @@ class _NavigationScreenState extends State<NavigationScreen> {
   void initState() {
     super.initState();
     final token = AuthSession.instance.accessToken;
-    if (token == null || token == 'demo.access') return;
     if (widget.delivery != null) {
       _delivery = widget.delivery;
-      _startLocationStream(token, widget.delivery!);
-    } else {
-      _loadCurrent(token);
     }
+    if (token == null) return;
+    if (token == 'demo.access') {
+      _startDemoAnimation();
+      return;
+    }
+    if (widget.delivery != null) {
+      if (widget.delivery!.isActive) {
+        _startLocationStream(token, widget.delivery!);
+      }
+      return;
+    }
+    _loadCurrent(token);
   }
 
   Future<void> _loadCurrent(String token) async {
@@ -56,86 +68,95 @@ class _NavigationScreenState extends State<NavigationScreen> {
     } catch (_) {}
   }
 
-  /// Starts a GPS location stream for the rider and pushes location fixes to the backend.
+  /// Starts a GPS-only stream. Missing or poor-quality fixes are never replaced
+  /// with simulated or cached coordinates for a live delivery.
   Future<void> _startLocationStream(String token, RiderDelivery d) async {
-    // Check if location service is available
-    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!mounted) return;
     if (!serviceEnabled) {
-      // Location service disabled - fall back to simulated position
-      _locationTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
-        _progress = (_progress + 5 / 300).clamp(0.0, 1.0);
-        final position = simulatedRider(d).position;
-        if (!mounted) return;
-        setState(() {});
-        try {
-          await service.updateLocation(token, d.id, position.latitude,
-              position.longitude);
-        } catch (_) {}
-      });
+      _setTrackingStatus('Location services are off. Live tracking is paused.');
       return;
     }
 
-    // Get current position (will request permission if needed)
-    Position? position;
-    try {
-      position = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.high);
-      _lastKnownPosition = position;
-    } catch (_) {
-      position = null;
+    var permission = await Geolocator.checkPermission();
+    if (!mounted) return;
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+    if (!mounted) return;
+    if (permission != LocationPermission.whileInUse &&
+        permission != LocationPermission.always) {
+      _setTrackingStatus(permission == LocationPermission.deniedForever
+          ? 'Location permission is disabled. Enable it in Settings to share your location.'
+          : 'Location permission was denied. Live tracking is paused.');
+      return;
     }
 
-    if (position != null) {
-      _locationTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
-        try {
-          Position currentPos = await Geolocator.getCurrentPosition(
-              desiredAccuracy: LocationAccuracy.high);
-          if (!mounted) return;
-          setState(() {});
-          try {
-            await service.updateLocation(token, d.id, currentPos.latitude,
-                currentPos.longitude);
-          } catch (_) {
-            // Fall back to last known position on error
-            if (_lastKnownPosition != null) {
-              if (!mounted) return;
-              setState(() {});
-              try {
-                await service.updateLocation(token, d.id, _lastKnownPosition!.latitude,
-                    _lastKnownPosition!.longitude);
-              } catch (_) {}
-            }
-          }
-        } catch (_) {
-          // Fall back to last known position on error
-          if (_lastKnownPosition != null) {
-            if (!mounted) return;
-            setState(() {});
-            try {
-              await service.updateLocation(token, d.id, _lastKnownPosition!.latitude,
-                  _lastKnownPosition!.longitude);
-            } catch (_) {}
-          }
-        }
-      });
-    } else {
-      // Permission denied or location unavailable - use simulated position
-      _locationTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
-        _progress = (_progress + 5 / 300).clamp(0.0, 1.0);
-        final position = simulatedRider(d).position;
-        if (!mounted) return;
-        setState(() {});
-        try {
-          await service.updateLocation(token, d.id, position.latitude,
-              position.longitude);
-        } catch (_) {}
-      });
+    _setTrackingStatus('Waiting for an accurate GPS fix.');
+    _locationSubscription = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 10,
+      ),
+    ).listen(
+      (position) => _submitLocation(token, d, position),
+      onError: (Object _) =>
+          _setTrackingStatus('GPS is unavailable. Live tracking is paused.'),
+    );
+  }
+
+  Future<void> _submitLocation(
+      String token, RiderDelivery d, Position position) async {
+    final observedAt = position.timestamp.toUtc();
+    final now = DateTime.now().toUtc();
+    if (position.accuracy <= 0 ||
+        position.accuracy > 100 ||
+        observedAt.isBefore(now.subtract(const Duration(minutes: 2))) ||
+        observedAt.isAfter(now.add(const Duration(seconds: 30))) ||
+        (_lastSubmittedAt != null && !observedAt.isAfter(_lastSubmittedAt!))) {
+      _setTrackingStatus('Waiting for a fresh GPS fix with better accuracy.');
+      return;
     }
+    if (_locationUpdateInFlight) return;
+
+    _lastKnownPosition = position;
+    _lastSubmittedAt = observedAt;
+    _locationUpdateInFlight = true;
+    if (mounted) setState(() {});
+    try {
+      await service.updateLocation(
+        token,
+        d.id,
+        position.latitude,
+        position.longitude,
+        accuracyM: position.accuracy,
+        observedAt: observedAt,
+      );
+      _setTrackingStatus('Live GPS tracking is on.');
+    } catch (_) {
+      _setTrackingStatus(
+          'Could not update live location. Tracking may be delayed.');
+    } finally {
+      _locationUpdateInFlight = false;
+    }
+  }
+
+  void _startDemoAnimation() {
+    _locationTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (!mounted) return;
+      setState(() => _progress = (_progress + 5 / 300).clamp(0.0, 1.0));
+    });
+  }
+
+  void _setTrackingStatus(String status) {
+    if (!mounted || _trackingStatus == status) return;
+    setState(() => _trackingStatus = status);
   }
 
   @override
   void dispose() {
     _locationTimer?.cancel();
+    _locationSubscription?.cancel();
     super.dispose();
   }
 
@@ -165,6 +186,23 @@ class _NavigationScreenState extends State<NavigationScreen> {
       route: buildRoute(_pickup(d), _dropoff(d)),
       progress: _progress,
     );
+  }
+
+  List<SimulatedRider> get _mapRiders {
+    if (AuthSession.instance.accessToken == 'demo.access') {
+      return [simulatedRider(_delivery)];
+    }
+    if (!_live) return const [];
+    final position = _lastKnownPosition;
+    if (position == null) return const [];
+    return [
+      SimulatedRider(
+        id: 'me',
+        name: 'You',
+        color: RiderApp.brandGreen,
+        route: [LatLng(position.latitude, position.longitude)],
+      ),
+    ];
   }
 
   String get _pickupLabel {
@@ -217,6 +255,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
         });
         if (next == 'delivered') {
           _locationTimer?.cancel();
+          _locationSubscription?.cancel();
           _completeLocally();
         } else {
           _toast(next == 'picked_up'
@@ -283,7 +322,8 @@ class _NavigationScreenState extends State<NavigationScreen> {
   @override
   Widget build(BuildContext context) {
     final d = _delivery;
-    final next = d == null ? 'picked_up' : (_nextStatus(d.status) ?? 'delivered');
+    final next =
+        d == null ? 'picked_up' : (_nextStatus(d.status) ?? 'delivered');
     final nextLabel = d == null || !d.isActive
         ? (_demoLocalPickedUp ? 'Mark as Delivered' : 'Mark as Picked Up')
         : _buttonLabel(next);
@@ -292,7 +332,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
       body: Stack(
         children: [
           LiveMap(
-            riders: [simulatedRider(d)],
+            riders: _mapRiders,
             pickup: _pickup(d),
             dropoff: _dropoff(d),
             title: d == null || !d.isActive
@@ -300,7 +340,10 @@ class _NavigationScreenState extends State<NavigationScreen> {
                 : d.statusLabel,
             subtitle: _dropoffLabel,
             initialZoom: 13,
-            centerOn: LagosLocations.victoriaIsland,
+            centerOn: _lastKnownPosition == null
+                ? LagosLocations.victoriaIsland
+                : LatLng(_lastKnownPosition!.latitude,
+                    _lastKnownPosition!.longitude),
           ),
           Positioned(
             top: MediaQuery.of(context).padding.top + 12,
@@ -323,6 +366,8 @@ class _NavigationScreenState extends State<NavigationScreen> {
               pickups: _pickupLabel,
               dropoff: _dropoffLabel,
               parcel: d?.parcelInfo.isEmpty ?? true ? null : d!.parcelInfo,
+              trackingStatus:
+                  _live && d?.isActive == true ? _trackingStatus : null,
               nextLabel: nextLabel,
               busy: _busy,
               onPressed: _advanceStatus,
@@ -404,6 +449,7 @@ class _DeliveryActionCard extends StatelessWidget {
     required this.pickups,
     required this.dropoff,
     this.parcel,
+    this.trackingStatus,
     required this.nextLabel,
     required this.busy,
     required this.onPressed,
@@ -412,6 +458,7 @@ class _DeliveryActionCard extends StatelessWidget {
   final String pickups;
   final String dropoff;
   final String? parcel;
+  final String? trackingStatus;
   final String nextLabel;
   final bool busy;
   final VoidCallback onPressed;
@@ -471,6 +518,23 @@ class _DeliveryActionCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 16),
+          ],
+          if (trackingStatus != null) ...[
+            Row(
+              children: [
+                const Icon(Icons.my_location,
+                    size: 16, color: Color(0xFF5B616A)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    trackingStatus!,
+                    style:
+                        const TextStyle(fontSize: 12, color: Color(0xFF5B616A)),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
           ],
           SizedBox(
             width: double.infinity,
